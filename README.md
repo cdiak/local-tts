@@ -1,130 +1,75 @@
-# obsidian-tts — Local Neural TTS for Obsidian (Kokoro)
+# obsidian-tts
 
-A high-quality, fully offline text-to-speech plugin for Obsidian that brings **word-level karaoke highlighting + click-to-seek** (like Eleven Reader) using the tiny but excellent **Kokoro-82M** neural model.
+A local, neural text-to-speech plugin for Obsidian built on the Kokoro-82M model.
 
-> **Current status**: The core architecture has been significantly strengthened with explicit state ownership (see `PlaybackSession` and `TtsServer` classes). The plugin now has a much more robust model for managing audio playback and the local Kokoro server process, grounded in careful reasoning about mutable state.
+The plugin runs a small, fully offline neural TTS model locally and streams audio to Obsidian with the goal of natural, responsive playback and precise word-level synchronization.
 
-## Why this plugin?
+## Current State
 
-Existing options are excellent but each misses a piece of the ideal experience:
+The plugin can currently:
 
-| Plugin                  | Local Neural? | Word Highlight | Click-to-Seek | Floating Player | Notes |
-|-------------------------|---------------|----------------|---------------|-----------------|-------|
-| Edge TTS (travisvn)     | No (Edge API) | No (FR open)   | No            | Excellent       | Best voices today, cloud |
-| obsidian-local-tts      | Yes (Kokoro)  | Sentence only  | No            | Good            | Best local today |
-| TTS Highlight           | OS voices     | Yes (word)     | Partial       | Basic           | Uses SpeechSynthesis |
-| **obsidian-tts (this)** | Yes (Kokoro)  | **Yes (word)** | **In progress** | Yes             | The local Eleven Reader goal |
+- Run the real Kokoro-82M model via a local Node.js server (no cloud calls)
+- Read selected text or the current line aloud using the local model
+- Support multiple voices and playback speed
+- Clean input text (optionally skipping code blocks and YAML frontmatter)
+- Handle arbitrarily long documents through on-demand, chunked synthesis
+- Persist settings, including the required Node.js binary path on macOS
 
-## Development Process
+Playback works, but it is not yet fast. There is noticeable latency before the first audio plays and small gaps between chunks on longer passages. Word-level highlighting exists in a basic form but is not yet tightly synchronized or feature-complete.
 
-This plugin was developed using **Grok Build** by xAI.
+## Approach
 
-One of the more interesting aspects of the work has been the development methodology itself. Major design decisions — especially around state management — were made by following an iterative **SICP-driven loop**:
+This project is being developed with a strong emphasis on clean architecture and deliberate design:
 
-1. Identify the core computational concept involved (e.g., mutable state, object identity, ownership of resources).
-2. Read the relevant sections from *Structure and Interpretation of Computer Programs* (particularly Chapter 3: Modularity, Objects, and State).
-3. Apply those concepts to the design and implementation.
-4. Document the reasoning and lessons in `docs/SICP-ANNOTATIONS.md`.
+- Strict separation of concerns across layers (Obsidian integration, coordination, and pure domain logic)
+- Explicit ownership of mutable state and external resources (following principles from *Structure and Interpretation of Computer Programs*)
+- Demand-driven processing for long inputs rather than loading everything up front
+- Small, focused modules
 
-This created a very deliberate, high-signal process where the code was not only written, but explicitly connected to foundational ideas in computer science. The project is also serving as a vehicle for deeper study toward building a Transformer Meta-Circular Evaluator.
+Major design decisions are documented in `docs/SICP-ANNOTATIONS.md`.
 
-The current state model (`PlaybackSession` and `TtsServer`) was heavily influenced by this approach, particularly the ideas in SICP 3.1.1 and 3.1.3 around objects with local state and the costs of uncontrolled assignment.
+## Why This Exists
 
-## Key Features (Planned / In Progress)
+Most existing TTS solutions in Obsidian either rely on cloud services or use the operating system's built-in voices. The goal of this plugin is to offer high-quality, private, offline neural synthesis with tight integration into the editor.
 
-- **Hotkey-driven**: Select text → `Ctrl/Cmd+Shift+R` (or your binding) reads it aloud
-- **Small local model**: Kokoro-82M (~82M params) — downloads ~90 MB quantized model once, then fully offline
-- **Word-by-word highlight**: The exact word being spoken is highlighted in your Markdown source (CM6 decorations)
-- **Click anywhere to jump**: While playing, click any word in the note → audio seeks precisely to that point
-- **Floating player**: Draggable mini-player with play/pause, speed, voice, progress, stop
-- **Smart parsing**: Skips code blocks, frontmatter, URLs, math, tags, etc.
-- **Multiple voices & speed** (0.5x–2.0x)
-- **No cloud, no keys, private**
+Rather than rushing to add features on top of a fragile foundation, the current focus has been on building a solid, maintainable core that can support more sophisticated playback behavior in the future.
 
-## Important: macOS Users — Node.js Path (Most Common Issue)
+## Roadmap / Direction
 
-On macOS, Obsidian runs in a restricted environment and often cannot find `node` even if it works in your terminal.
+Near-term work is focused on:
 
-**Symptoms**: You see `spawn node ENOENT` in the console and the plugin falls back to the built-in macOS voice.
+- Reducing latency for the first chunk and between chunks
+- Improving word-level timing accuracy
+- Building responsive, editor-integrated highlighting
+- Adding support for seeking within the audio
 
-**Fix** (one-time):
+Longer term, the aim is smooth, continuous playback with precise synchronization between the spoken audio and the source text, while keeping the entire experience fully local and private.
 
-1. Find your real Node binary. The most common locations are:
-   - Apple Silicon (M1/M2/M3/M4): `/opt/homebrew/bin/node`
-   - Intel Macs: `/usr/local/bin/node`
+## Installation (Development / Testing)
 
-   You can also run this in Terminal:
-   ```bash
-   command -v node || which node
-   ```
+Until the plugin is published to the Obsidian community plugins list:
 
-2. Open **Local TTS (Kokoro)** settings in Obsidian.
-3. Paste the full path into **"Path to Node.js binary"**.
-4. (Optional but recommended) Click **"Detect Node"** and **"Test Node"** buttons.
-5. Enable **"Use local Kokoro model"** and **"Auto-start server"**.
-6. Trigger "Read selection aloud" again.
+1. Clone this repository into your vault's `.obsidian/plugins/` folder
+2. Run `npm install && npm run build`
+3. In Obsidian, disable Safe Mode and enable the plugin
 
-Once this is set correctly, the plugin will download and run the real high-quality Kokoro-82M neural model completely locally.
-
-## Current Phase (0)
-
-Scaffold + settings + stub commands are done. The plugin is installable in a test vault and shows a friendly Notice on load.
-
-See the detailed technical plan in the session notes or the internal `plan.md` (in the developer's Grok session).
-
-## Installation (for testers / early adopters)
-
-Until published:
-
-1. Clone or copy this folder to your vault's `.obsidian/plugins/obsidian-tts/`
-2. `cd .obsidian/plugins/obsidian-tts && npm install && npm run build`
-3. In Obsidian: Community plugins → Turn off Safe mode → Reload plugins (or restart)
-4. Enable **"Local TTS (Kokoro)"**
+On macOS you will also need to set the full path to your Node.js binary in the plugin settings (the "Detect Node" and "Test Node" buttons can help).
 
 ## Development
 
 ```bash
-cd obsidian-tts
 npm install
-npm run dev          # watch mode
-# In another terminal / Obsidian test vault:
-# symlink or copy the folder into .obsidian/plugins/obsidian-tts
+npm run dev
 ```
 
 Build produces `main.js` (bundled).
 
-## Architecture Notes (from research)
-
-- **Model**: Kokoro-82M via `kokoro-js` (Xenova) + ONNX Runtime Web (WASM/WebGPU). Timestamped ONNX variant available for precise phoneme durations.
-- **Highlighting**: CodeMirror 6 `StateField` + `Decoration.mark` (pattern heavily inspired by [applefavorite/obsidian-local-tts highlight-manager.ts](https://github.com/applefavorite/obsidian-local-tts/blob/main/src/highlight-manager.ts)).
-- **Timings**: v1 uses streaming chunk + proportional character allocation (surprisingly effective). v2 will use exact `pred_dur` from the timestamped model.
-- **Click-to-seek**: Maintain `timedWords[]` with `{startSec, sourceFrom, sourceTo}`. Use `editor.cm.posAtCoords()` + binary search on click.
-- **Player**: Fixed-position draggable DOM element + single `HTMLAudioElement` (or AudioContext for future gapless).
-
-Full research + links are in the development plan.
-
-## Roadmap (High Level)
-
-See the 9-phase plan in the session `plan.md`. Rough order:
-- Phase 1–2: Real settings + floating player stub + basic Audio
-- Phase 3: Kokoro synthesis + text processor
-- Phase 4–6: Word timings + CM6 highlight + click-to-seek magic
-- Phase 7+: Polish, model download UX, speed/voice live controls
-- Phase 8: Docs + v0.1 release
-
-Contributions, ideas, and testing feedback extremely welcome!
-
 ## License
 
-MIT (plugin) + Kokoro weights are Apache 2.0 (see Hugging Face model cards).
+MIT
 
 ## Credits & Research Sources
 
 - Kokoro-82M: https://huggingface.co/hexgrad/Kokoro-82M
-- kokoro-js + timestamps guidance: Ryan Welch blog, Xenova, onnx-community
-- Obsidian plugin patterns: official sample-plugin, deepseek-md in this workspace, applefavorite's local-tts (highlighting), andrewmcgivery/soundscapes (UI)
-- Existing TTS plugins in the Obsidian ecosystem (see comparisons above)
-
----
-
-*Built with ❤️ for local, private, delightful reading in Obsidian.*
+- kokoro-js: Xenova / onnx-community
+- SICP-informed development process (see `docs/SICP-ANNOTATIONS.md`)
