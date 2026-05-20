@@ -2,14 +2,7 @@
 
 A high-quality, fully offline text-to-speech plugin for Obsidian that brings **word-level karaoke highlighting + click-to-seek** (like Eleven Reader) using the tiny but excellent **Kokoro-82M** neural model.
 
-> **Current status (excellent foundation)**: 
-> - Full project scaffolded and builds cleanly (`npm run build`)
-> - Hotkey + command "Read selection aloud" works
-> - **Draggable floating player** with play/pause/stop/close is live (uses device OS voice for instant feedback)
-> - Full settings tab (voice, speed, highlight color, quant, parsing toggles)
-> - Smart fallback to current line if nothing selected
->
-> Real **Kokoro local neural model** + word-level highlight + click-to-seek are the next milestone (research complete, implementation path documented). The native-binary challenge with kokoro-js means we will follow the proven `server/` child-process pattern used by the top local TTS plugin. See the plan file for details.
+> **Current status**: The core architecture has been significantly strengthened with explicit state ownership (see `PlaybackSession` and `TtsServer` classes). The plugin now has a much more robust model for managing audio playback and the local Kokoro server process, grounded in careful reasoning about mutable state.
 
 ## Why this plugin?
 
@@ -20,7 +13,22 @@ Existing options are excellent but each misses a piece of the ideal experience:
 | Edge TTS (travisvn)     | No (Edge API) | No (FR open)   | No            | Excellent       | Best voices today, cloud |
 | obsidian-local-tts      | Yes (Kokoro)  | Sentence only  | No            | Good            | Best local today |
 | TTS Highlight           | OS voices     | Yes (word)     | Partial       | Basic           | Uses SpeechSynthesis |
-| **obsidian-tts (this)** | Yes (Kokoro)  | **Yes (word)** | **Yes**       | Planned         | The local Eleven Reader goal |
+| **obsidian-tts (this)** | Yes (Kokoro)  | **Yes (word)** | **In progress** | Yes             | The local Eleven Reader goal |
+
+## Development Process
+
+This plugin was developed using **Grok Build** by xAI.
+
+One of the more interesting aspects of the work has been the development methodology itself. Major design decisions — especially around state management — were made by following an iterative **SICP-driven loop**:
+
+1. Identify the core computational concept involved (e.g., mutable state, object identity, ownership of resources).
+2. Read the relevant sections from *Structure and Interpretation of Computer Programs* (particularly Chapter 3: Modularity, Objects, and State).
+3. Apply those concepts to the design and implementation.
+4. Document the reasoning and lessons in `docs/SICP-ANNOTATIONS.md`.
+
+This created a very deliberate, high-signal process where the code was not only written, but explicitly connected to foundational ideas in computer science. The project is also serving as a vehicle for deeper study toward building a Transformer Meta-Circular Evaluator.
+
+The current state model (`PlaybackSession` and `TtsServer`) was heavily influenced by this approach, particularly the ideas in SICP 3.1.1 and 3.1.3 around objects with local state and the costs of uncontrolled assignment.
 
 ## Key Features (Planned / In Progress)
 

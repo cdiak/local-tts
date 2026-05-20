@@ -170,6 +170,32 @@ This change was the first concrete step in moving from imperative scattered muta
 
 ---
 
+### 2026-05 — Chose Approach A (Strict Stratified Ownership) + Beginning Big-Bang Refactor
+
+**SICP Sections driving the architecture**:
+- **2.1.2 Abstraction Barriers** — Each layer should only depend on the interfaces of the layer below it.
+- **2.2.4 Stratified Design** — Systems should be built in layers where each level uses a small set of primitives from the level below (inspired by the Picture Language).
+- **3.1.3 The Costs of Introducing Assignment** (applied at module level) — We are deliberately avoiding creating another "god object" that accumulates too many responsibilities and mutable state.
+- **4.1.7 Separating Syntactic Analysis from Execution** — Analogous to separating *what* the plugin does from *how* it is wired to Obsidian.
+
+**Decision**: Perform a full architectural refactor (big bang) to establish clean layers.
+
+**Key Rule for this refactor**:
+- The `SessionManager` (coordination layer) owns **playback logic and server coordination**.
+- It does **not** own UI concerns such as highlighting. Highlighting is a downstream consumer.
+
+**Planned structure**:
+- `src/main.ts` — ultra thin
+- `src/bin/obsidian-tts-plugin.ts` — Obsidian lifecycle only
+- `src/lib/coordination/session-manager.ts` — central coordinator (new)
+- `src/lib/core/` — pure domain (PlaybackSession, TtsServer, Timing, TextProcessor)
+- `src/lib/ui/` — presentation
+- `src/lib/obsidian/` — adapter layer for all Obsidian APIs
+
+This is the beginning of the execution of Approach A.
+
+---
+
 ### 2026-05 — Created TtsServer class
 
 - New file: `src/tts-server.ts`
@@ -207,3 +233,54 @@ Next: Integrate the session into `main.ts` `startPlayback`/`stopPlayback` and en
 ---
 
 *This document will be updated after every significant piece of work in the state audit and subsequent phases.*
+
+---
+
+## 2026-05 — Approach A Big-Bang Refactor: Wiring SessionManager + Stratified Layers (First Working End-to-End)
+
+**Computational Concepts Identified**
+- Strict stratified design with narrow abstraction barriers between layers.
+- Ownership of mutable state and "which playback is active" centralized in a coordination object (SessionManager).
+- Downstream notification for effects (highlighting) rather than tight coupling or ownership by the model.
+- Extraction of pure domain calculations (timing) into reusable, side-effect-free functions.
+
+**SICP Sections Reviewed Before Implementation**
+- **2.1.2 Abstraction Barriers**: "We can maintain the abstraction barrier... by using only the primitive procedures of the level below, and by not relying on the internal representation of the data objects."  
+  Applied ruthlessly: `PlaybackSession` now exposes only `start(audio, url)`, `stop()`, `isPlaying()`, `getCurrentText()`, `getCurrentTime()`. It knows nothing of `TimedWord`, offsets, or highlighting. The coordination layer may use those primitives but never reaches into the audio element or raf details that used to live inside it.
+- **2.2.4 Stratified Design**: The Picture Language example shows how a complex system (e.g., `square-limit`) is built by combining a small set of primitives (`beside`, `below`, `flip-horiz`) at each level, with each level providing a new vocabulary to the level above.  
+  We now have:
+  - Core: `TtsServer.synthesize()`, `PlaybackSession` (audio lifecycle), `buildProportionalTimedWords()` (pure data)
+  - Coordination: `SessionManager.startPlayback(text, offset)` — the single vocabulary item the bin layer uses
+  - Bin/Obsidian: commands + `HighlightManager` (adapter) wired only via the two callbacks
+- **3.1.1 Local State Variables** + **3.1.3 The Costs of Introducing Assignment**:  
+  `SessionManager` is now the sole owner of `currentSession`, the `highlightRaf`, `currentTimedWords`, and `currentBaseOffset`. These are exactly analogous to the `balance` inside `make-withdraw` or `make-account`. By moving the highlight-driving RAF out of `PlaybackSession` (where it was polluting core with presentation concerns) and into the coordinator, we localize all the "identity over time" mutation to one place. Rapid "Read aloud" calls can no longer create overlapping RAF loops or multiple `Audio` objects because `stopPlayback()` (which cancels the raf and clears) is called first, structurally.
+- **3.3.3  Modeling with Mutable Data** (analog): Treating the highlight decorations as a downstream effect (observer) rather than internal state of the session prevents the "aliasing" problem where the session object would have to know about CodeMirror `StateField`s.
+
+**Changes Made (Respecting the "Highlighting Downstream" Rule)**
+1. `PlaybackSession` (core) was stripped of `TimedWord`, `highlightManager`, RAF loop, and all offset math. It is now a pure audio-resource owner (SICP 2.1.2 barrier).
+2. New `src/lib/core/timing.ts` — pure function `buildProportionalTimedWords` lives here. Coordination imports the result type and the builder; it never duplicates the algorithm.
+3. `SessionManager` (coordination):
+   - Owns the highlight-driving loop and the decision of *when* a word is active.
+   - Notifies via narrow `onHighlight(from, to)` and `onClearHighlight()` callbacks.
+   - Never imports or mentions `HighlightManager`.
+   - Calls `new PlaybackSession(text)` — only the core constructor.
+4. `obsidian-tts-plugin.ts` (bin layer):
+   - Imports `HighlightManager` (obsidian adapter) and wires the callbacks.
+   - Computes correct `baseOffset` using `editor.posToOffset(...)` for both selection and line cases.
+   - Calls `attachToEditor` right before `startPlayback` (the moment we have the `Editor` in hand).
+   - This is the only place that knows about Obsidian `Editor` and CM6 decorations.
+
+**Resulting Layer Dependencies (Confirmed)**
+- bin → coordination + obsidian-adapters only (never reaches into core internals)
+- coordination → core + (via callbacks) the obsidian adapter surface
+- core → nothing Obsidian-specific
+- Highlighting remains strictly downstream of the coordination decision point.
+
+**Appraisal Against SICP Goals**
+- The "only one playback" invariant is now triply enforced: (1) explicit `stopPlayback()` at entry, (2) `currentSession` single reference, (3) the raf and audio resources are created only after the previous ones are torn down.
+- A future `FloatingPlayer` (ui layer) or click-to-seek can be added by extending the callbacks or adding a `getProgress()` query on `SessionManager` without touching `PlaybackSession` or the highlight manager.
+- The design is now ready for the "next working version" requirement: load, command, real Kokoro synthesize via TtsServer, real PlaybackSession audio, and real (offset-correct) highlighting all succeed while obeying the stratification.
+
+This step completes the wiring of the coordination layer and gives us a functional plugin under Approach A. Subsequent work can focus on hardening (error paths, server lifecycle via plugin data dir instead of hardcoded), adding ui/ components, and removing the remaining ad-hoc timing approximation once the server can supply word timestamps.
+
+*Documented as part of the mandatory "identify concept → review SICP → change → annotate" loop.*
