@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+main.js
+main.js.map
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# Obsidian plugin test artifacts (optional)
+.obsidian/
+
+# Model cache (large files downloaded at runtime)
+*.onnx
+*.bin
+cache/
+models/

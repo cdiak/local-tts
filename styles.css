@@ -1,0 +1,58 @@
+/* Obsidian TTS Plugin Styles (Phase 0+) */
+
+/* Ribbon icon subtle styling */
+.obsidian-tts-ribbon {
+  opacity: 0.85;
+}
+
+/* Future: floating player container */
+.obsidian-tts-player {
+  position: fixed;
+  bottom: 60px;
+  right: 20px;
+  z-index: 1000;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 280px;
+  font-size: 13px;
+}
+
+/* ============================================
+   Word-by-word TTS Highlight (Karaoke style)
+   ============================================ */
+.obsidian-tts-highlight {
+  background-color: var(--obsidian-tts-highlight-color, rgba(255, 208, 0, 0.38));
+  border-radius: 3px;
+  padding: 1px 3px;
+  margin: -1px -2px;
+  transition: background-color 80ms ease-out;
+  /* Make it stand out nicely in both light and dark themes */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+/* Optional: slightly stronger in dark mode */
+.theme-dark .obsidian-tts-highlight {
+  background-color: var(--obsidian-tts-highlight-color, rgba(255, 208, 0, 0.32));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+
+/* Player buttons */
+.obsidian-tts-player button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.obsidian-tts-player button:hover {
+  background: var(--background-modifier-hover);
+}

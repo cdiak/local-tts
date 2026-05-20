@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-tts",
+  "name": "Local TTS (Kokoro)",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Local neural TTS powered by Kokoro-82M. Highlight text, hotkey to read, floating player with play/pause, word-by-word highlighting, and click any word in your note to seek playback — fully offline.",
+  "author": "cdiak",
+  "authorUrl": "https://github.com/cdiak",
+  "isDesktopOnly": true
+}

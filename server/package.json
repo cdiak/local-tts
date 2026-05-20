@@ -1,0 +1,16 @@
+{
+  "name": "obsidian-tts-server",
+  "version": "0.1.0",
+  "description": "Local Kokoro TTS server for the Obsidian TTS plugin (child process)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "kokoro-js": "^1.2.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
