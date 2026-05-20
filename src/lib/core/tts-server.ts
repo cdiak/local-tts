@@ -1,17 +1,24 @@
 // Content moved from src/tts-server.ts during big-bang refactor (Approach A)
+//
+// This class owns the lifecycle of the local Kokoro child process.
+// It receives all configuration via a ServerConfig (see types.ts).
+// It knows nothing about Obsidian, vaults, or how the paths were discovered.
+// This is a direct application of SICP 2.1.2 (abstraction barriers).
 
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import { ServerConfig, SynthesisOptions } from "./types";
 
 export class TtsServer {
   private process: ChildProcess | null = null;
   private ready = false;
   private starting = false;
-  private port: number;
+  private config: ServerConfig;
 
-  constructor(port = 19200) {
-    this.port = port;
+  constructor(config: ServerConfig) {
+    this.config = config;
+    console.log("[TtsServer] Constructed with nodePath =", config.nodePath || "(none provided)");
   }
 
   async ensureRunning(): Promise<boolean> {
@@ -35,13 +42,32 @@ export class TtsServer {
   private async startInternal(): Promise<boolean> {
     this.stop();
 
-    const serverDir = this.getServerDir();
+    const { serverDir, port, nodePath } = this.config;
     const serverScript = path.join(serverDir, "index.js");
 
-    if (!fs.existsSync(serverScript)) return false;
+    if (!fs.existsSync(serverScript)) {
+      console.error("[TtsServer] server/index.js not found at", serverScript);
+      return false;
+    }
 
-    const nodePath = this.resolveNodeBinary();
-    this.process = spawn(nodePath, [serverScript, "--port", String(this.port)], {
+    const effectiveNode = nodePath && nodePath.trim().length > 0
+      ? nodePath
+      : "node";
+
+    // Guard: if the bin layer gave us a path that doesn't exist at spawn time,
+    // fail fast with a clear message instead of a cryptic ENOENT.
+    console.log(`[TtsServer] About to spawn: effectiveNode="${effectiveNode}"`);
+
+    if (!fs.existsSync(effectiveNode)) {
+      console.error(
+        `[TtsServer] Node binary not found at "${effectiveNode}". ` +
+        `This path was provided by the Obsidian plugin layer. ` +
+        `Please use the "Detect Node" button in Settings or enter the correct path manually.`
+      );
+      return false;
+    }
+
+    this.process = spawn(effectiveNode, [serverScript, "--port", String(port)], {
       cwd: serverDir,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -66,9 +92,10 @@ export class TtsServer {
   }
 
   private async pollReady(maxAttempts = 15): Promise<boolean> {
+    const port = this.config.port;
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const res = await fetch(`http://127.0.0.1:${this.port}/status`);
+        const res = await fetch(`http://127.0.0.1:${port}/status`);
         if (res.ok && (await res.json()).ready) {
           this.ready = true;
           return true;
@@ -88,12 +115,17 @@ export class TtsServer {
     return this.ready;
   }
 
-  async synthesize(text: string): Promise<any> {
+  async synthesize(text: string, options: SynthesisOptions = {}): Promise<any> {
     if (!this.ready) await this.ensureRunning();
-    const res = await fetch(`http://127.0.0.1:${this.port}/synthesize`, {
+
+    const payload: any = { text };
+    if (options.voice) payload.voice = options.voice;
+    if (options.speed !== undefined) payload.speed = options.speed;
+
+    const res = await fetch(`http://127.0.0.1:${this.config.port}/synthesize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
     });
     return res.json();
   }
@@ -111,14 +143,7 @@ export class TtsServer {
     return this.ready;
   }
 
-  private getServerDir(): string {
-    // simplified — in real code this would come from plugin context
-    return "/Users/cdiak/Development/Projects/obsidian-tts/server";
-  }
-
-  private resolveNodeBinary(): string {
-    const candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
-    for (const p of candidates) if (fs.existsSync(p)) return p;
-    return "node";
+  getConfig(): ServerConfig {
+    return { ...this.config };
   }
 }

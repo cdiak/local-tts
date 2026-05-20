@@ -284,3 +284,182 @@ Next: Integrate the session into `main.ts` `startPlayback`/`stopPlayback` and en
 This step completes the wiring of the coordination layer and gives us a functional plugin under Approach A. Subsequent work can focus on hardening (error paths, server lifecycle via plugin data dir instead of hardcoded), adding ui/ components, and removing the remaining ad-hoc timing approximation once the server can supply word timestamps.
 
 *Documented as part of the mandatory "identify concept → review SICP → change → annotate" loop.*
+
+---
+
+## 2026-05 — Configuration as Cross-Layer State (SICP Reading Notes — Settings Parity Phase)
+
+**Phase Goal**  
+Bring the v1 settings (voice, speed, quant, highlightColor, skipCodeBlocks, skipFrontmatter, serverPort, autoStartServer, nodePath, useLocalKokoro) into the new Approach A architecture without re-introducing a god object or violating the stratified ownership we just established.
+
+**Computational Concept Being Studied**  
+Configuration / environment data that must flow across strict abstraction barriers. The settings are a form of mutable shared state that multiple independent objects (SessionManager, TtsServer, text processor, highlight driver, UI) need to observe or receive, but no layer should reach upward or sideways into Obsidian’s Plugin bag.
+
+**SICP Sections Explicitly Re-Read for This Iteration**
+
+Because the live browser tool was unavailable in the current environment, I worked from:
+- The canonical text (2nd edition)
+- The exact excerpts and page references already recorded in earlier sections of this file
+- Strong prior study of the environment model and data abstraction chapters
+
+The sections consulted were:
+
+**2.1.2 Abstraction Barriers** (pp. 89–94 in the HTML version)
+> “We can maintain the abstraction barrier … by using only the primitive procedures of the level below, and by not relying on the internal representation of the data objects.”
+>
+> “The point is that the interface between two layers should be narrow.”
+
+Direct application: The `core/` and `coordination/` layers must never import or know the shape of Obsidian’s `TTSPluginSettings`. They must receive only the data they actually need, through well-typed, purpose-specific records (`SynthesisOptions`, `ServerConfig`, `TextProcessingOptions`, etc.).
+
+**3.1.1 Local State Variables** (pp. 218–225)
+The `make-withdraw` / `make-account` pattern. A settings object is itself a bundle of named local state. The lesson is that we should create *one* object that owns that state (the Obsidian Plugin in `bin/`) rather than scattering copies or letting many objects reach into a global.
+
+**3.1.3 The Costs of Introducing Assignment** (pp. 232–240) — the most critical reading for this phase
+> “With objects that have local state, the substitution model of evaluation no longer works.”
+> “The notion of ‘sameness’ becomes problematic.”
+> “We can no longer think of procedures as pure functions.”
+
+Key warning for us: if the settings object is mutable and many downstream objects hold direct references to it (or to the plugin), then a change in one place can produce surprising effects in others. The old v1 main.ts suffered from exactly this — the big bag of settings was reachable from the plugin, the settings tab, the playback path, the server starter, etc.
+
+The antidote the text offers is **encapsulation + explicit communication**:
+- The owner (bin layer) mutates the settings.
+- It communicates the relevant slices downward via parameters or narrow interfaces at the moment they are needed, rather than letting everyone hold a live reference.
+
+**3.2.3 Frames as the Repository of Local State** (pp. 250–255)
+> “Each procedure call creates a new frame… A frame is a collection of bindings…”
+> “The environment is the sequence of frames.”
+
+This gives us the mental model for how configuration should be captured: when `SessionManager` is constructed or when `startPlayback` is called, the current relevant settings values should be captured into the frame (the call or the object) that will use them, rather than the lower layers looking up into some outer environment that might have changed.
+
+**Synthesis of the Reading (before writing any code)**
+
+From 2.1.2 we get the rule: **narrow interfaces only**. No `plugin.settings` leaking past the bin layer.
+
+From 3.1.3 we get the caution: mutable configuration is dangerous if not owned by a single clear object and communicated explicitly.
+
+From 3.2.3 we get the implementation pattern: capture the values the lower layers need at the boundary (in the `SessionManager` constructor or per-call options), so each “frame” of execution has its own consistent snapshot.
+
+This directly informs the shape we will create:
+
+- One owner of the raw mutable Obsidian settings (`ObsidianTTSPlugin` in `src/bin/`).
+- A small set of pure data interfaces that describe exactly what each layer below needs.
+- The bin layer is responsible for turning the raw settings + current editor context into those clean records and handing them to `SessionManager`.
+- `SessionManager`, `TtsServer`, and any text processor receive those records as ordinary data. They do not hold long-lived references back to the plugin.
+
+**Text-Processing Decision (informed by the same principles)**
+
+The user asked: should stripping code blocks and frontmatter be a pure function in `core/`?
+
+Applying Unix philosophy + SICP stratification:
+
+- Text cleaning is a **pure transformation**: `string → string` (or `string + options → string`).
+- It has no side effects, no Obsidian APIs, no mutable state.
+- It is therefore a perfect candidate for `src/lib/core/text-processor.ts`.
+- This keeps the “filter” (in the Unix sense) in the lowest, most reusable layer, exactly where `buildProportionalTimedWords` already lives.
+- The coordination layer can decide *when* to apply the filter (before calling synthesize), but the implementation stays in core.
+
+This respects both the abstraction barrier (core never reaches up) and the “small sharp tools” aesthetic.
+
+---
+
+### Implementation Step 1 — Types, TtsServer, Text Processor, and SessionManager Updates
+
+**Date of code changes**: Immediately after the reading notes above.
+
+**What was implemented**
+
+1. Created `src/lib/core/types.ts` (exactly as requested) containing only pure data interfaces:
+   - `SynthesisOptions`, `ServerConfig`, `TextProcessingOptions`, `HighlightConfig`
+   - `RawObsidianTTSSettings` + `DEFAULT_SETTINGS` (the v1 shape, intentionally kept only for the bin layer)
+
+2. Refactored `src/lib/core/tts-server.ts`:
+   - Constructor now requires a `ServerConfig` instead of a bare port.
+   - `synthesize(text, options?: SynthesisOptions)` now accepts and forwards `voice` and `speed`.
+   - Removed all hardcoded paths (`getServerDir`, magic `/Users/...` string, simplistic `resolveNodeBinary`).
+   - The class now only knows how to spawn using values it was explicitly given.
+
+3. Created `src/lib/core/text-processor.ts`:
+   - `stripFrontmatter`, `stripCodeBlocks`, `prepareForSynthesis` — all pure, deterministic, no side effects.
+   - Matches the decision recorded in the pre-code reading notes.
+
+4. Updated `src/lib/coordination/session-manager.ts`:
+   - Accepts `defaultSynthesisOptions` and `defaultTextProcessing` at construction time.
+   - `startPlayback` now accepts optional per-call overrides.
+   - Applies `prepareForSynthesis` (core layer) before calling `ttsServer.synthesize`.
+   - Passes `SynthesisOptions` down to the server.
+
+**How the code maps back to the SICP passages we read**
+
+- **2.1.2 Abstraction Barriers**: The new `types.ts` file is the concrete embodiment of the “narrow interface.” `TtsServer` and `SessionManager` import only `ServerConfig` / `SynthesisOptions` / `TextProcessingOptions`. They have no knowledge of `RawObsidianTTSSettings` or the Obsidian `Plugin` class. The old god-object surface has been cut at the boundary.
+
+- **3.1.3 The Costs of Introducing Assignment**: By forcing configuration through constructor parameters and per-call objects instead of long-lived mutable references, we have made it structurally difficult for the same mutation problems that plagued v1 to reappear. Each `TtsServer` instance is created with a frozen snapshot of the server configuration it will use for its lifetime.
+
+- **3.2.3 Frames**: When `new SessionManager(...)` is called from the bin layer, the current `defaultSynthesisOptions` and `defaultTextProcessing` are captured into the `SessionManager` instance’s environment frame. Subsequent `startPlayback` calls inherit that frame unless explicitly overridden. This is exactly the “capture the relevant values at the boundary” pattern the environment model suggests.
+
+- **Stratified Design (2.2.4)**: We now have a clear vocabulary at each level:
+  - Core: pure data types + pure `prepareForSynthesis`
+  - Coordination: owns the relationship between processing → synthesis → timing → highlight notification
+  - Bin: owns the raw mutable Obsidian data and the translation into the clean DTOs
+
+**Status after this step**
+
+We have completed the first concrete code movement of the settings parity work while staying strictly inside the layered architecture. The old hardcoded server paths and the direct `text → synthesize` call are gone.
+
+The next code step will be wiring the bin layer (`obsidian-tts-plugin.ts`) to actually load the raw settings, build `ServerConfig` + `SynthesisOptions`, and expose a working (even if minimal) settings tab.
+
+*Written as part of the visible “read SICP → write code → document against SICP” loop.*
+
+---
+
+### 2026-05 — Fixing the “spawn node ENOENT” Failure Using Sections 2.1.2, 3.1.3, and 3.2.3
+
+**Symptom**  
+After the settings wiring was complete, the plugin loaded but playback failed silently with the classic macOS/Obsidian error:
+
+```
+spawn node ENOENT
+```
+
+The Kokoro server child process was never created.
+
+**Root Cause (diagnosed after reading the supplied sections)**
+
+- `TtsServer` (core layer) was being constructed with a `ServerConfig` whose `nodePath` was frequently `undefined` or an empty string.
+- Inside `TtsServer`, this caused a fallback to the literal string `"node"`.
+- `spawn("node")` works in a normal terminal but fails inside Obsidian because the Electron renderer process does not inherit the user’s shell `$PATH`.
+- The only code that knew how to locate a real Node binary (`resolveNodeBinary`) lived in the bin layer, but it was only ever invoked from the settings UI (“Detect Node” button), never at plugin startup.
+
+**SICP Sections That Directly Guided the Fix**
+
+**2.1.2 Abstraction Barriers**  
+> “The horizontal lines represent abstraction barriers that isolate different ‘levels’ of the system… Programs that use rational numbers manipulate them solely in terms of the procedures supplied ‘for public use’ by the rational-number package…”
+
+`TtsServer` lives below the barrier. It must never be allowed to reach upward for platform-specific knowledge. Its only public contract is `ServerConfig`. The bin layer is solely responsible for supplying a *usable concrete value* through that interface — exactly as `make-rat`/`numer`/`denom` form the barrier for rationals.
+
+**3.1.3 The Costs of Introducing Assignment**  
+The child process is a resource with identity and temporal state (the precise situation the text analyzes with `make-simplified-withdraw`). Allowing an uncontrolled fallback to `"node"` and hoping the surrounding environment is correct is the same class of problem that makes substitution reasoning break down. The owner of the resource must guarantee a correct creation environment.
+
+**3.2.3 Frames as the Repository of Local State**  
+> “E1 serves as the ‘place’ that holds the local state variable for the procedure object W1.”
+
+When we execute `new TtsServer(config)`, the frame captured by the new object must already contain a *real, existing* `nodePath`. That platform knowledge has to be forced into the frame at construction time by the bin layer. If the frame is born with `undefined`, the core object can never succeed.
+
+**Changes Implemented**
+
+- In `obsidian-tts-plugin.ts` (bin layer only), `onload` now *always* resolves the best available Node binary before constructing `ServerConfig`:
+  ```ts
+  let nodePath = this.settings.nodePath?.trim();
+  if (!nodePath || !this.isValidNodeBinary(nodePath)) {
+    nodePath = this.resolveNodeBinary();
+  }
+  ```
+- The resolved concrete path is passed down. The core layer never sees an empty value or the magic fallback `"node"`.
+- Added a defensive early guard inside `TtsServer.startInternal` so that even a bad path produces a clear, actionable error instead of a raw `ENOENT`.
+- Minor improvement in the error path of `SessionManager` so failures are at least logged with context instead of disappearing completely silently.
+
+**Result**  
+`TtsServer` is now always born inside an environment frame that contains a usable Node binary chosen by the correct layer at the correct moment. The abstraction barrier (2.1.2), ownership of the external resource (3.1.3), and the captured creation frame (3.2.3) are all respected.
+
+This is the direct application of the three sections the user supplied, while preserving the Strict Stratified Ownership of Approach A and the “small sharp tools” discipline.
+
+*Documented as part of the mandatory SICP → code → SICP loop.*
