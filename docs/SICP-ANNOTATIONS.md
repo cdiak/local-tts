@@ -411,6 +411,60 @@ The next code step will be wiring the bin layer (`obsidian-tts-plugin.ts`) to ac
 
 ---
 
+### 2026-05 — Adding a Prefetching Synthesis Pipeline (SICP 3.5)
+
+**Context**  
+After getting basic chunked synthesis working, playback had high first-chunk latency and noticeable gaps between chunks because synthesis was fully sequential with the player.
+
+**SICP Reading**  
+Re-read relevant parts of **3.5 Streams**, especially:
+- 3.5.1 (streams as delayed lists and `delay`/`force`)
+- 3.5.3 (exploiting the stream paradigm — `stream-map`, pipelines, and the prime sieve as a producer-consumer system)
+
+**Design Decision**  
+Introduced a small, composable transformer in the coordination layer:
+
+- `src/lib/coordination/chunk-pipeline.ts` exports `synthesizingChunkStream(...)`
+- It takes an `AsyncIterable<TextChunk>` (from core) + a `synthesize` function
+- It produces an `AsyncIterable<AudioSegment>` with a configurable `prefetch` depth
+- The pipeline keeps N syntheses in flight, allowing the model to work on the next chunk while the current audio is playing
+
+This is a direct application of the stream transformer / pipeline pattern from 3.5, kept deliberately small (< 70 lines) and living in coordination so the core text chunker stays pure.
+
+`SegmentPlayer` was lightly evolved to have `playSegments(segments)` as its primary low-level API, with `playFromChunkStream` now delegating to the pipeline (default prefetch = 1, callers can request higher).
+
+`SessionManager` now requests `prefetch: 2` for normal playback.
+
+**Result**  
+The architecture now supports prefetching without discarding the existing stream-based design. Actual latency improvement will be measured in the next session, but the structure is in place for much more responsive behavior.
+
+*Documented as part of the mandatory loop.*
+
+---
+
+### 2026-05 — Defining Audio Segment Representations (SICP 2.1.2 + 3.5 + 3.2.3)
+
+**Task**: Introduce types for audio segments that support demand-driven prefetching while keeping the core layer free of Web Audio API concerns and allowing the player to control when expensive decoding work occurs.
+
+**SICP Sections Consulted**:
+- **2.1.2 Abstraction Barriers**: Different layers should only depend on the interfaces of the layers below them. The synthesis pipeline must not be forced to know about `AudioBuffer` or `AudioContext`.
+- **2.1.3 What Is Meant by Data?**: Data is defined by constructors/selectors plus the conditions they must satisfy. We need two related representations of “a spoken audio chunk” with different realization costs.
+- **3.2.3 Frames as the Repository of Local State** + **3.1.3 The Costs of Introducing Assignment**: Decoding and scheduling audio buffers are time-sensitive, resource-heavy operations. Their ownership and timing must be localized to the object that owns the playback timeline (the player).
+- **3.5 Streams**: The pipeline produces values (segments) that the player consumes on a real-time schedule. We want the producer to be able to run ahead without forcing the consumer’s expensive work (decoding) to happen at production time.
+
+**Design**:
+- `RawAudioSegment` lives in `core/types.ts`. It carries the raw bytes + metadata. It is cheap to produce and can travel through the async generator pipeline without pulling in browser audio APIs.
+- `AudioSegment` (also in core) contains a decoded `AudioBuffer`. It is created by the player when it is ready to schedule the audio.
+- Decoding is deliberately deferred to the player so CPU work can be driven by playback progress rather than by synthesis eagerness.
+
+This separation keeps the core representation-agnostic while giving the coordination layer (specifically `SegmentPlayer`) control over when stateful, costly operations are realized — a direct application of the ideas in the sections above.
+
+The types were added in this commit.
+
+**Cleanup step (same iteration)**: Removed the old local `AudioSegment` definition (tied to the deprecated `HTMLAudioElement` representation) from `chunk-pipeline.ts` and updated the module to import and use `RawAudioSegment` from core. This keeps the pipeline producing the cheap raw form while the player will own the transition to the decoded `AudioSegment`. The change reinforces the abstraction barrier (2.1.2) and defers costly realization (decoding) to the layer that owns the timeline.
+
+---
+
 ### 2026-05 — Fixing the “spawn node ENOENT” Failure Using Sections 2.1.2, 3.1.3, and 3.2.3
 
 **Symptom**  

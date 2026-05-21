@@ -97,7 +97,9 @@ export class SessionManager {
       },
     });
 
-    this.segmentPlayer.playFromChunkStream(chunkStream).catch((err) => {
+    // Use prefetch=2 so the next chunk is being synthesized while the current
+    // one is playing. This is the main lever for reducing inter-chunk latency.
+    this.segmentPlayer.playFromChunkStream(chunkStream, 2).catch((err) => {
       console.error("[SessionManager] Chunked playback error:", err);
       // Surface the failure to the user instead of failing completely silently
       // (the bin layer could show a Notice if we pass a callback, but logging + stop is the minimal fix here)

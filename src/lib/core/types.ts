@@ -57,13 +57,50 @@ export interface TextChunk {
   startOffset: number; // relative to the original cleaned document text
 }
 
-/** Result of synthesizing one chunk */
-export interface AudioSegment {
-  audio: HTMLAudioElement;
-  objectUrl: string;
+/**
+ * Raw audio data produced by the synthesis pipeline (before decoding).
+ *
+ * This representation is cheap to produce and transport through the
+ * demand-driven stream. It carries the original bytes from the server
+ * plus the metadata needed for playback and highlighting.
+ *
+ * Decoding to an AudioBuffer is intentionally deferred to the player
+ * (in the coordination layer) so that CPU work can be scheduled
+ * according to actual playback needs (SICP 3.5 + 3.2.3).
+ */
+export interface RawAudioSegment {
+  /** Raw audio bytes (typically WAV) returned by the Kokoro server */
+  audioData: ArrayBuffer;
+
+  /** Duration of this segment in seconds */
   duration: number;
-  timedWords: import("./timing").TimedWord[]; // relative to this segment
-  chunkStartOffset: number; // document offset of the original chunk
+
+  /** Word-level timing data relative to this segment */
+  timedWords: TimedWord[];
+
+  /** Starting character offset in the original document text */
+  chunkStartOffset: number;
+}
+
+/**
+ * A decoded audio segment ready to be scheduled on an AudioContext.
+ *
+ * This is the form consumed by the player. It is created by decoding
+ * a RawAudioSegment. The player owns the decoding step and the
+ * playback timeline (see 3.1.3 / 3.2.3 on ownership of mutable state).
+ */
+export interface AudioSegment {
+  /** The decoded audio buffer ready for scheduling */
+  buffer: AudioBuffer;
+
+  /** Duration of this segment in seconds */
+  duration: number;
+
+  /** Word-level timing data relative to this segment */
+  timedWords: TimedWord[];
+
+  /** Starting character offset in the original document text */
+  chunkStartOffset: number;
 }
 
 /**

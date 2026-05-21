@@ -16,6 +16,7 @@
 
 import { TextChunk } from "../core/types";
 import { TimedWord } from "../core/timing";
+import { synthesizingChunkStream, AudioSegment } from "./chunk-pipeline";
 
 export interface SegmentPlayerOptions {
   synthesize: (text: string) => Promise<{
@@ -45,33 +46,36 @@ export class SegmentPlayer {
     this.onSegmentStart = options.onSegmentStart;
   }
 
-  async playFromChunkStream(chunkStream: AsyncIterable<TextChunk>): Promise<void> {
+  /**
+   * Play a stream of already-synthesized audio segments.
+   * This is the preferred low-level API for the player.
+   */
+  async playSegments(segments: AsyncIterable<AudioSegment>): Promise<void> {
     this.stop();
     this.isPlaying = true;
 
-    for await (const chunk of chunkStream) {
-      if (!this.isPlaying) break; // allow early stop
+    for await (const segment of segments) {
+      if (!this.isPlaying) break;
 
-      const segment = await this.synthesize(chunk.text);
-
-      this.cumulativeDocOffset = chunk.startOffset;
-      this.onSegmentStart?.(chunk.startOffset);
+      this.cumulativeDocOffset = segment.chunkStartOffset;
+      this.onSegmentStart?.(segment.chunkStartOffset);
 
       this.currentAudio = segment.audio;
       this.currentUrl = segment.objectUrl;
 
-      // Attach time tracking
+      // Time tracking for downstream consumers (highlighting, etc.)
       const tick = () => {
         if (!this.currentAudio || !this.isPlaying) return;
+
         const localTime = this.currentAudio.currentTime;
         const absoluteTime = this.cumulativeTime + localTime;
 
-        // Find active word in this segment
         const active = segment.timedWords.find(
           (w) => localTime >= w.start && localTime < w.end
         );
+
         if (active && this.onTimeTick) {
-          const docFrom = chunk.startOffset + active.from;
+          const docFrom = segment.chunkStartOffset + active.from;
           this.onTimeTick(absoluteTime, docFrom);
         }
 
@@ -82,18 +86,19 @@ export class SegmentPlayer {
 
       this.currentAudio.onended = () => {
         this.cumulativeTime += segment.duration;
-        URL.revokeObjectURL(this.currentUrl!);
+        if (this.currentUrl) URL.revokeObjectURL(this.currentUrl);
         this.currentAudio = null;
         this.currentUrl = null;
       };
 
-      this.isPlaying = true;
       await this.currentAudio.play().catch(() => this.stop());
 
-      // Wait for this segment to finish before moving to the next chunk
+      // Wait until this segment finishes before consuming the next
       await new Promise((resolve) => {
         if (this.currentAudio) {
+          const originalOnEnded = this.currentAudio.onended;
           this.currentAudio.onended = () => {
+            if (originalOnEnded) originalOnEnded.call(this.currentAudio as any);
             this.cumulativeTime += segment.duration;
             if (this.currentUrl) URL.revokeObjectURL(this.currentUrl);
             this.currentAudio = null;
@@ -108,6 +113,25 @@ export class SegmentPlayer {
 
     this.isPlaying = false;
   }
+
+  /**
+   * Backwards-compatible API.
+   * By default uses a small prefetch pipeline so the next chunk can be
+   * synthesized while the current one is playing.
+   */
+  async playFromChunkStream(
+    chunkStream: AsyncIterable<TextChunk>,
+    prefetch: number = 1
+  ): Promise<void> {
+    const segmentStream = synthesizingChunkStream(
+      chunkStream,
+      this.synthesize,
+      { prefetch }
+    );
+
+    await this.playSegments(segmentStream);
+  }
+
 
   stop(): void {
     this.isPlaying = false;
